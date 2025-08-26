@@ -1,0 +1,763 @@
+#Splitting Data For Survival Analysis and then Classification
+################################DATA SPLITTING
+#import packages
+import numpy as np
+import pandas as pd
+from datetime import datetime
+import sklearn
+from sklearn.model_selection import train_test_split
+from datetime import date
+
+#Import Data
+patients = pd.read_csv("/Users/ck624/Library/CloudStorage/OneDrive-UniversityofCambridge/PhD Project (Will Brown)/AI Projects/R_AutoPrognosis/Auto_Prognosis/data_with_outcome/2025_data/patients_may_survival_and_classificationAug142025.csv")
+
+patients.TREATMENT.value_counts()
+
+#remove unnecessary variables 
+del patients['TREATMENT']
+del patients['Country']
+del patients['Unnamed: 0']
+del patients['START_DATE']
+del patients['HAS_FAMILY_MS_HISTORY']
+del patients['NUM_RELAPSES_LAST_YEAR']
+del patients['DATE_OF_EDSS']
+del patients['polysymptomatic']
+#fill variables as necessary
+patients['ANY_ENHANCE'] = patients['ANY_ENHANCE'].fillna(0)
+severity_map = {'MILD': 1, 'MODERATE': 2, 'SEVERE': 3}
+patients['SEVERITY'] = patients['SEVERITY'].map(severity_map)
+patients['SEVERITY'] = patients['SEVERITY'].fillna(0)
+
+
+########split into low mod high
+efficacy = 1
+eff = "low"
+#today = date.today().isoformat()
+today = "2025-08-21"
+#High
+patients = patients[patients.EFFICACY == efficacy]
+del patients['EFFICACY']
+
+#SPLIT INTO TRAIN AND TEST
+from sklearn.model_selection import StratifiedShuffleSplit
+
+#remove patients from survey so they have to be in test - and also their pairs
+survey_patients = pd.read_csv("/Users/ck624/Library/CloudStorage/OneDrive-UniversityofCambridge/PhD Project (Will Brown)/AI Projects/R_AutoPrognosis/Auto_Prognosis/data_with_outcome/2025_data/pats_for_survey_Aug202025.csv")
+survey_patients_2 = pd.read_csv("/Users/ck624/Library/CloudStorage/OneDrive-UniversityofCambridge/PhD Project (Will Brown)/AI Projects/R_AutoPrognosis/Auto_Prognosis/data_with_outcome/2025_data/doubles_Aug212025.csv")
+survey_patients_3 = pd.read_csv("/Users/ck624/Library/CloudStorage/OneDrive-UniversityofCambridge/PhD Project (Will Brown)/AI Projects/R_AutoPrognosis/Auto_Prognosis/data_with_outcome/2025_data/triplets_Aug212025.csv")
+survey_patients_2 = survey_patients_2[survey_patients_2['DOUBLE_ID'].isin(survey_patients['DOUBLE_ID'])].copy()
+
+survey_patients = pd.concat([survey_patients_2, survey_patients_3])
+
+#remove survey patients from eligible patients from splitting
+# Remove all rows with those PAIR_IDs
+patients = patients[~patients['PATIENT_ID'].isin(survey_patients['PATIENT_ID'])].copy()
+
+#patients_class = patients[patients.classification == 1] #68% in low, 47% in mod, 25% in high 
+# Create a stratification key
+patients['together'] = (
+    patients['relapse'].astype(str) + "_" +
+    patients['disability'].astype(str) + "_" +
+    patients['classification'].astype(str) + "_" +
+    patients['VISIT_YEAR_MCDONALD'].astype(str)
+)
+
+# Count strata sizes
+strata_counts = patients['together'].value_counts()
+
+# Identify rare strata
+rare_strata = strata_counts[strata_counts < 2].index
+common_strata = strata_counts[strata_counts >= 2].index
+
+# Split rare and common data
+patients_common = patients[patients['together'].isin(common_strata)].copy()
+patients_rare = patients[patients['together'].isin(rare_strata)].copy()
+
+# Stratified split for common strata
+from sklearn.model_selection import StratifiedShuffleSplit
+sss = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+train_idx, test_idx = next(sss.split(patients_common, patients_common['together']))
+
+train_common = patients_common.iloc[train_idx]
+test_common = patients_common.iloc[test_idx]
+
+# Random split for rare strata
+patients_rare['set'] = np.random.choice(['train', 'test'], size=len(patients_rare), p=[0.8, 0.2])
+train_rare = patients_rare[patients_rare['set'] == 'train']
+test_rare = patients_rare[patients_rare['set'] == 'test']
+
+# Combine results
+train_df = pd.concat([train_common, train_rare], ignore_index=True)
+test_df = pd.concat([test_common, test_rare], ignore_index=True)
+
+del train_common
+del test_common
+del train_rare
+del test_rare
+del patients_rare
+del patients_common
+del rare_strata
+del common_strata
+del strata_counts
+
+# Drop helper columns
+del train_df['together']
+del test_df['together']
+
+del train_df['set']
+del test_df['set']
+
+del train_df['VISIT_YEAR_MCDONALD']
+del test_df['VISIT_YEAR_MCDONALD']
+
+#save train and testing groups for the efficacy to be used for relapse or disability, survival or classification
+
+#want to keep the patient ids for each group
+train_df_id = train_df['PATIENT_ID']
+filename = f"train_df_{eff}_{today}.csv"
+train_df_id.to_csv(filename, index=False)
+del train_df['PATIENT_ID']
+
+train_df_id = pd.read_csv("train_df_low_2025-08-21.csv")
+
+test_df_id = test_df['PATIENT_ID']
+filename = f"test_df_{eff}_{today}.csv"
+test_df_id.to_csv(filename, index=False)
+del test_df['PATIENT_ID']
+
+test_df_id = pd.read_csv("test_df_low_2025-08-21.csv")
+
+del train_idx
+del test_idx
+
+
+
+#------------------------------------------------------------------------------
+#RELAPSE ONLY - SURVIVAL ANALYSIS
+#------------------------------------------------------------------------------
+outcome = "relapse"
+method = "survival_analysis"
+
+train_df = patients[patients['PATIENT_ID'].isin(train_df_id['PATIENT_ID'])]
+test_df = patients[patients['PATIENT_ID'].isin(test_df_id['PATIENT_ID'])]
+
+#remove disability outcomes
+del train_df['disability']
+del test_df['disability']
+del train_df['time_to_event_disability']
+del test_df['time_to_event_disability']
+del train_df['classification']
+del test_df['classification']
+del train_df['PATIENT_ID']
+del test_df['PATIENT_ID']
+del train_df['VISIT_YEAR_MCDONALD']
+del test_df['VISIT_YEAR_MCDONALD']
+del train_df['EFFICACY']
+del test_df['EFFICACY']
+
+# Separate Features and Target Variables - Training
+X_train = train_df.drop(columns=['relapse', 'time_to_event_relapse'])
+y_train = train_df['relapse']
+T_train = train_df['time_to_event_relapse']
+
+# Separate Features and Target Variables - Testing
+X_test = test_df.drop(columns=['relapse', 'time_to_event_relapse'])
+y_test = test_df['relapse']
+T_test = test_df['time_to_event_relapse']
+
+y_test_1 = y_test[y_test == 1]
+#start wandb run
+import os
+os.environ["WANDB_DISABLE_SYMLINK"] = "true"
+os.environ["WANDB_API_KEY"] = "2849e29e84c26a426555886f8383a53945843b00"
+
+import wandb
+wandb_entity = "ck624-univeristy-of-cambridge"
+#print(wandb.__file__)
+run = wandb.init(
+    project="survival_analysis_vs_classification",
+    entity=wandb_entity,
+    name=f"{outcome}_{eff}_{method}_{today}"
+    #config=f"./experiments/default.yaml",
+    #settings=wandb.Settings(disable_symlink=True)
+        #config = f"./TE-CDE/experiments/default.yaml",
+)
+eval_time_horizons = np.array([1826])#taking different time horizons to evaluate
+eval_time_horizons = eval_time_horizons.tolist()
+study_name = f"{today}_{eff}_EFFICACY_{outcome}_{method}"
+
+from pathlib import Path
+workspace = Path("/Users/ck624/Python/project_AP/models/survival_analysis/")
+from autoprognosis.studies.risk_estimation import RiskEstimationStudy
+from autoprognosis.utils.serialization import load_model_from_file
+from autoprognosis.utils.tester import evaluate_survival_estimator
+from autoprognosis.plugins import Plugins
+
+#print(train_df.isnull().sum())     
+#print(np.isinf(train_df.select_dtypes(include=[np.number])).any())
+
+study = RiskEstimationStudy(
+    study_name=study_name,
+    dataset=train_df,
+    target="relapse",
+    time_to_event="time_to_event_relapse",
+    time_horizons=eval_time_horizons,
+    num_iter=10,
+    num_study_iter=5,
+    workspace=workspace,
+    score_threshold=0.1,
+)
+study.run()
+
+output = workspace / study_name / "model.p"
+model = load_model_from_file(output)
+
+run.log({"Model Name": study_name})
+print(f"Model {model.name()}")
+run.log({"Model Type": "0.36 * fast_ica->maxabs_scaler->data_cleanup->deephit + 0.64 * fast_ica->nop->data_cleanup->lognormal_aft"})
+
+# Predict Relapse Probabilities
+# metrics = evaluate_survival_estimator(model, X_test, T_test, y_test, eval_time_horizons)
+# print(metrics)
+
+# Train the model
+model.fit(X_train, T_train, y_train)
+
+# Predict using the model
+#if we want to only predict for one efficacy
+# Separate Features and Target Variables - Testing
+'''
+test_df_1 = test_df[test_df.EFFICACY == 3]
+X_test = test_df_1.drop(columns=['relapse', 'time_to_relapse'])
+y_test = test_df_1['relapse']
+T_test = test_df_1["time_to_relapse"]
+'''
+estimate = model.predict(X_test, eval_time_horizons)
+print(estimate)
+
+#BRIER SCORE
+from sksurv.metrics import brier_score
+
+train_df['relapse'] = train_df['relapse'].astype('bool')
+survival_train = train_df[['relapse','time_to_event_relapse']].to_records(index=False)
+#survival_train = survival_train.to_numpy()
+test_df['relapse'] = test_df['relapse'].astype('bool')
+survival_test = test_df[['relapse','time_to_event_relapse']].to_records(index=False)
+#survival_test = survival_test.to_numpy()
+times, score = brier_score(survival_train, survival_test, estimate, eval_time_horizons)
+run.log({"Brier Scores At Each Time Point": "5YR:0.55"})
+
+#CONCORDANCE INDEX 
+from sksurv.metrics import concordance_index_censored
+estimate5year = estimate.iloc[:,0]
+ytestbool = y_test.astype('bool')
+charrel5year = concordance_index_censored(ytestbool, T_test, estimate5year)
+run.log({"C index At Each Time Point": "5YR:0.56"})
+
+#Finish WandB run
+table = wandb.Table(columns=["Text", "Info"])
+table.add_data("Data From", "May 9th 2025")
+table.add_data("test_set_size", "0.20")
+table.add_data("random_state", "42")
+table.add_data("Model Name", study_name)
+#table.add_data("Model Type", "average( pca->maxabs_scaler->data_cleanup->qda + pca->maxabs_scaler->data_cleanup->lda + pca->uniform_transform->data_cleanup->random_forest)")
+wandb.log({"Tables": table})
+
+
+#TRY TO COMPARE SURVIVAL TO CLASSIFICATION
+####
+test_df = patients[patients['PATIENT_ID'].isin(test_df_id['PATIENT_ID'])]
+del test_df['VISIT_YEAR_MCDONALD']
+del test_df['together']
+del test_df['PATIENT_ID']
+
+#check eligible for 5 year classification
+test_df_class = test_df[test_df.classification == 1]
+#remove classification marker 
+del test_df_class['classification']
+
+#test_df_class = test_df_class[test_df_class.EFFICACY == 3]
+#create new relapse at 5 year columns
+test_df_class.loc[:, 'RELAPSE_AT_5_YEAR'] = np.where(
+    (test_df_class['relapse'] == 1) & (test_df_class['time_to_event_relapse'] < 1826),
+    1,
+    0
+)
+
+X_test = test_df_class.drop(columns=['relapse', 'time_to_event_relapse', 'disability', 'time_to_event_disability', 'RELAPSE_AT_5_YEAR'])
+
+y_test = test_df_class['RELAPSE_AT_5_YEAR']
+
+estimate = model.predict(X_test, eval_time_horizons)#using eval_time_horizon of 2 years and 5 years
+estimate5year = estimate.iloc[:, 0]
+
+from sklearn import metrics
+fpr, tpr, thresholds = metrics.roc_curve(y_test, estimate5year)
+auc = metrics.roc_auc_score(y_test, estimate5year)
+run.log({"AUCROC (Classification Version)": "0.45"})
+
+precision, recall, thresholds = metrics.precision_recall_curve(y_test, estimate5year)
+aucprc = metrics.auc(recall, precision)
+run.log({"AUCPRC (Classification Version)": "0.15"})
+run.finish()
+
+y_test_1 = y_test[y_test == 1]
+
+
+
+#------------------------------------------------------------------------------
+#DISABILITY - SURVIVAL ANALYSIS
+#------------------------------------------------------------------------------
+#take the ids we've saved and match to patients in the patient df
+#then use the disability outcomes from there 
+#reset outcome
+outcome = "disability"
+method = "survival_analysis"
+train_df = patients[patients['PATIENT_ID'].isin(train_df_id['PATIENT_ID'])]
+test_df = patients[patients['PATIENT_ID'].isin(test_df_id['PATIENT_ID'])]
+
+#remove visit year column
+del train_df['VISIT_YEAR_MCDONALD']
+del test_df['VISIT_YEAR_MCDONALD']
+#remove patient id
+del train_df['PATIENT_ID']
+del test_df['PATIENT_ID']
+#remove together grouping
+del train_df['together']
+del test_df['together']
+#remove classification column
+del train_df['classification']
+del test_df['classification']
+#remove relapse information
+del train_df['relapse']
+del test_df['relapse']
+del train_df['time_to_event_relapse']
+del test_df['time_to_event_relapse']
+
+#remove anyone with NA in disability
+train_df = train_df.dropna(subset=['disability'])
+test_df = test_df.dropna(subset=['disability'])
+
+# Separate Features and Target Variables - Training
+X_train = train_df.drop(columns=['disability', 'time_to_event_disability'])
+y_train = train_df['disability']
+T_train = train_df['time_to_event_disability']
+
+# Separate Features and Target Variables - Testing
+X_test = test_df.drop(columns=['disability', 'time_to_event_disability'])
+y_test = test_df['disability']
+T_test = test_df['time_to_event_disability']
+
+#start wandb run
+import os
+os.environ["WANDB_DISABLE_SYMLINK"] = "true"
+os.environ["WANDB_API_KEY"] = "2849e29e84c26a426555886f8383a53945843b00"
+
+import wandb
+wandb_entity = "ck624-univeristy-of-cambridge"
+#print(wandb.__file__)
+run = wandb.init(
+    project="survival_analysis_vs_classification",
+    entity=wandb_entity,
+    name=f"{outcome}_{eff}_{method}_{today}"
+    #config=f"./experiments/default.yaml",
+    #settings=wandb.Settings(disable_symlink=True)
+        #config = f"./TE-CDE/experiments/default.yaml",
+)
+eval_time_horizons = np.array([1826])#taking different time horizons to evaluate
+eval_time_horizons = eval_time_horizons.tolist()
+study_name = f"{today}_{eff}_EFFICACY_{outcome}_{method}"
+
+from pathlib import Path
+workspace = Path("/Users/ck624/Python/project_AP/models/survival_analysis/")
+from autoprognosis.studies.risk_estimation import RiskEstimationStudy
+from autoprognosis.utils.serialization import load_model_from_file
+from autoprognosis.utils.tester import evaluate_survival_estimator
+from autoprognosis.plugins import Plugins
+
+study = RiskEstimationStudy(
+    study_name=study_name,
+    dataset=train_df,
+    target="disability",
+    time_to_event="time_to_event_disability",
+    time_horizons=eval_time_horizons,
+    num_iter=10,
+    num_study_iter=5,
+    workspace=workspace,
+    score_threshold=0.0,
+)
+study.run()
+
+output = workspace / study_name / "model.p"
+model = load_model_from_file(output)
+
+run.log({"Model Name": study_name})
+
+print(f"Model {model.name()}")
+run.log({"Model Type": "0.71 * pca->nop->data_cleanup->lognormal_aft + 0.29 * pca->nop->data_cleanup->cox_ph"})
+
+# Predict Relapse Probabilities
+# metrics = evaluate_survival_estimator(model, X_test, T_test, y_test, eval_time_horizons)
+# print(metrics)
+
+# Train the model
+model.fit(X_train, T_train, y_train)
+
+# Predict using the model
+'''
+test_df_1 = test_df[test_df.EFFICACY == 3]
+X_test = test_df_1.drop(columns=['disability', 'time_to_disability'])
+y_test = test_df_1['disability']
+T_test = test_df_1["time_to_disability"]
+'''
+estimate = model.predict(X_test, eval_time_horizons)
+print(estimate)
+
+#BRIER SCORE
+from sksurv.metrics import brier_score
+train_df['disability'] = train_df['disability'].astype('bool')
+survival_train = train_df[['disability','time_to_event_disability']].to_records(index=False)
+#survival_train = survival_train.to_numpy()
+test_df['disability'] = test_df['disability'].astype('bool')
+survival_test = test_df[['disability','time_to_event_disability']].to_records(index=False)
+#survival_test = survival_test.to_numpy()
+times, score = brier_score(survival_train, survival_test, estimate, eval_time_horizons)
+
+run.log({"Brier Scores At Each Time Point": "5YR:0.77"})
+
+#CONCORDANCE INDEX 
+from sksurv.metrics import concordance_index_censored
+estimate5year = estimate.iloc[:, 0]
+ytestbool = y_test.astype('bool')
+charrel5year = concordance_index_censored(ytestbool, T_test, estimate5year)
+run.log({"C index At Each Time Point": "5YR:0.62"})
+
+#Finish WandB run
+table = wandb.Table(columns=["Text", "Info"])
+table.add_data("Data From", "May 9th 2025")
+table.add_data("test_set_size", "0.20")
+table.add_data("random_state", "42")
+table.add_data("Model Name", study_name)
+#table.add_data("Model Type", "average( pca->maxabs_scaler->data_cleanup->qda + pca->maxabs_scaler->data_cleanup->lda + pca->uniform_transform->data_cleanup->random_forest)")
+wandb.log({"Tables": table})
+
+
+
+#TRY TO COMPARE SURVIVAL TO CLASSIFICATION
+####
+test_df = patients[patients['PATIENT_ID'].isin(test_df_id['PATIENT_ID'])]
+
+del test_df['VISIT_YEAR_MCDONALD']
+del test_df['PATIENT_ID']
+#del test_df['together']
+
+#check eligible for 5 year classification
+test_df_class = test_df[test_df.classification == 1]
+#remove classification marker 
+del test_df_class['classification']
+test_df_class = test_df_class.dropna(subset=['disability'])
+
+#test_df_class = test_df_class[test_df_class.EFFICACY == 3]
+#create new relapse at 5 year columns
+test_df_class.loc[:, 'CDP_AT_5_YEAR'] = np.where(
+    (test_df_class['disability'] == True) & (test_df_class['time_to_event_disability'] < 1826),
+    1,
+    0
+)
+
+X_test = test_df_class.drop(columns=['relapse', 'time_to_event_relapse', 'disability', 'time_to_event_disability', 'CDP_AT_5_YEAR'])
+
+y_test = test_df_class['CDP_AT_5_YEAR']
+
+estimate = model.predict(X_test, eval_time_horizons)#using eval_time_horizon of 2 years and 5 years
+estimate5year = estimate.iloc[:, 0]
+
+from sklearn import metrics
+fpr, tpr, thresholds = metrics.roc_curve(y_test, estimate5year)
+auc = metrics.roc_auc_score(y_test, estimate5year)
+run.log({"AUCROC (Classification Version)": "0.76"})
+
+precision, recall, thresholds = metrics.precision_recall_curve(y_test, estimate5year)
+aucprc = metrics.auc(recall, precision)
+
+run.log({"AUCPRC": "0.18"})
+run.finish()
+
+
+
+
+
+#------------------------------------------------------------------------------
+#RELAPSE ONLY - CLASSIFICATION
+#------------------------------------------------------------------------------
+outcome = "relapse"
+method = "classification"
+
+train_df = patients[patients['PATIENT_ID'].isin(train_df_id['PATIENT_ID'])]
+test_df = patients[patients['PATIENT_ID'].isin(test_df_id['PATIENT_ID'])]
+
+#remove visit year
+del train_df['VISIT_YEAR_MCDONALD']
+del test_df['VISIT_YEAR_MCDONALD']
+#del patient id
+del train_df['PATIENT_ID']
+del test_df['PATIENT_ID']
+#remove together column
+#del train_df['together']
+#del test_df['together']
+#del disbaility columns
+del train_df['disability']
+del test_df['disability']
+del train_df['time_to_event_disability']
+del test_df['time_to_event_disability']
+
+train_df_class = train_df[train_df.classification == 1]
+del train_df_class['classification']
+test_df_class = test_df[test_df.classification == 1]
+del test_df_class['classification']
+
+#if time to relapse is < 1826 (5 years), relapse column = 1
+train_df_class.loc[:, 'RELAPSE_AT_5_YEAR'] = np.where(
+    (train_df_class['relapse'] == True) & (train_df_class['time_to_event_relapse'] < 1826),
+    1,
+    0
+)
+
+test_df_class.loc[:, 'RELAPSE_AT_5_YEAR'] = np.where(
+    (test_df_class['relapse'] == True) & (test_df_class['time_to_event_relapse'] < 1826),
+    1,
+    0
+)
+
+del test_df_class['relapse']
+del train_df_class['relapse']
+del test_df_class['time_to_event_relapse']
+del train_df_class['time_to_event_relapse']
+
+#splitting into x and y 
+X_train = train_df_class.drop(columns=['RELAPSE_AT_5_YEAR'])
+y_train = train_df_class['RELAPSE_AT_5_YEAR']
+
+X_test = test_df_class.drop(columns=['RELAPSE_AT_5_YEAR'])
+y_test = test_df_class['RELAPSE_AT_5_YEAR']
+
+import os
+os.environ["WANDB_DISABLE_SYMLINK"] = "true"
+os.environ["WANDB_API_KEY"] = "2849e29e84c26a426555886f8383a53945843b00"
+
+import wandb
+wandb_entity = "ck624-univeristy-of-cambridge"
+print(wandb.__file__)
+run = wandb.init(
+    project="survival_analysis_vs_classification",
+    entity=wandb_entity,
+    name=f"{outcome}_{eff}_{method}_{today}"
+    #config=f"./experiments/default.yaml",
+    #settings=wandb.Settings(disable_symlink=True)
+        #config = f"./TE-CDE/experiments/default.yaml",
+)
+
+from autoprognosis.studies.classifiers import ClassifierStudy
+from autoprognosis.plugins.prediction.classifiers import Classifiers
+study_name = f"{today}_{eff}_EFFICACY_{outcome}_{method}"
+from pathlib import Path
+workspace = Path("/Users/ck624/Python/project_AP/models/classification/")
+
+# Specify Study Parameters
+study = ClassifierStudy(study_name=study_name, 
+                        num_iter=10, 
+                        num_study_iter=5, 
+                        metric = "aucroc", 
+                        score_threshold = 0.5,
+                        dataset=train_df_class, 
+                        target= "RELAPSE_AT_5_YEAR", 
+                        workspace= workspace)  # the label column in the dataset
+
+# Run Study
+study.run()
+
+#get model out
+output = workspace / study_name / "model.p"
+from autoprognosis.utils.serialization import load_model_from_file
+model = load_model_from_file(output)
+from autoprognosis.utils.tester import evaluate_estimator
+metrics = evaluate_estimator(model, X_train, y_train)
+print(f"model {model.name()} -> {metrics['str']}")
+
+run.log({"Model Name": study_name})
+run.log({"Model Type": "model 0.19 * (pca->feature_normalizer->data_cleanup->xgboost) + 0.38 * (pca->feature_normalizer->data_cleanup->random_forest) + 0.43 * (nop->maxabs_scaler->data_cleanup->lgbm) "})
+
+# Predict Relapse Probabilities
+model.fit(X_train, y_train)
+
+#predict for only one efficacy if model trained on all
+'''
+test_df_1 = test_df_class[test_df_class.EFFICACY == 3]
+X_test = test_df_1.drop(columns=['RELAPSE_AT_5_YEAR'])
+y_test = test_df_1['RELAPSE_AT_5_YEAR']
+'''
+#
+proba = model.predict_proba(X_test)
+proba = proba.to_numpy()
+proba1 = proba[:, 1]
+
+# AUCROC
+from sklearn import metrics
+fpr, tpr, thresholds = metrics.roc_curve(y_test, proba1)
+auc = metrics.roc_auc_score(y_test, proba1)
+run.log({"AUCROC": "0.37"})
+
+# aucprc
+precision, recall, thresholds = metrics.precision_recall_curve(y_test, proba1)
+aucprc = metrics.auc(recall, precision)
+run.log({"AUCPRC": "0.18"})
+
+#Finish WandB run
+table = wandb.Table(columns=["Text", "Info"])
+table.add_data("Data From", "May 9th 2025")
+table.add_data("test_set_size", "0.20")
+table.add_data("random_state", "42")
+table.add_data("Model Name", study_name)
+#table.add_data("Model Type", "average( pca->maxabs_scaler->data_cleanup->qda + pca->maxabs_scaler->data_cleanup->lda + pca->uniform_transform->data_cleanup->random_forest)")
+wandb.log({"Tables": table})
+run.finish()
+
+
+#------------------------------------------------------------------------------
+#DISABILITY ONLY - CLASSIFICATION
+#------------------------------------------------------------------------------
+outcome = "disability"
+method = "classification"
+train_df = patients[patients['PATIENT_ID'].isin(train_df_id['PATIENT_ID'])]
+test_df = patients[patients['PATIENT_ID'].isin(test_df_id['PATIENT_ID'])]
+
+#remove visit year
+del train_df['VISIT_YEAR_MCDONALD']
+del test_df['VISIT_YEAR_MCDONALD']
+#del patient id
+del train_df['PATIENT_ID']
+del test_df['PATIENT_ID']
+#remove together column
+del train_df['together']
+del test_df['together']
+#del relapse columns
+del train_df['relapse']
+del test_df['relapse']
+del train_df['time_to_event_relapse']
+del test_df['time_to_event_relapse']
+
+train_df = train_df.dropna(subset=['disability'])
+test_df = test_df.dropna(subset=['disability'])
+
+train_df_class = train_df[train_df.classification == 1]
+del train_df_class['classification']
+test_df_class = test_df[test_df.classification == 1]
+del test_df_class['classification']
+
+#if time to relapse is < 1826 (5 years), relapse column = 1
+train_df_class.loc[:, 'CDP_AT_5_YEAR'] = np.where(
+    (train_df_class['disability'] == True) & (train_df_class['time_to_event_disability'] < 1826),
+    1,
+    0
+)
+
+test_df_class.loc[:, 'CDP_AT_5_YEAR'] = np.where(
+    (test_df_class['disability'] == True) & (test_df_class['time_to_event_disability'] < 1826),
+    1,
+    0
+)
+
+del test_df_class['disability']
+del train_df_class['disability']
+del test_df_class['time_to_event_disability']
+del train_df_class['time_to_event_disability']
+
+#splitting into x and y 
+X_train = train_df_class.drop(columns=['CDP_AT_5_YEAR'])
+y_train = train_df_class['CDP_AT_5_YEAR']
+
+X_test = test_df_class.drop(columns=['CDP_AT_5_YEAR'])
+y_test = test_df_class['CDP_AT_5_YEAR']
+
+import os
+os.environ["WANDB_DISABLE_SYMLINK"] = "true"
+os.environ["WANDB_API_KEY"] = "2849e29e84c26a426555886f8383a53945843b00"
+
+import wandb
+wandb_entity = "ck624-univeristy-of-cambridge"
+print(wandb.__file__)
+run = wandb.init(
+    project="survival_analysis_vs_classification",
+    entity=wandb_entity,
+    name=f"{outcome}_{eff}_{method}_{today}"
+    #config=f"./experiments/default.yaml",
+    #settings=wandb.Settings(disable_symlink=True)
+        #config = f"./TE-CDE/experiments/default.yaml",
+)
+
+from autoprognosis.studies.classifiers import ClassifierStudy
+from autoprognosis.plugins.prediction.classifiers import Classifiers
+
+study_name = f"{today}_{eff}_EFFICACY_{outcome}_{method}"
+
+from pathlib import Path
+workspace = Path("/Users/ck624/Python/project_AP/models/classification/")
+
+# Specify Study Parameters
+study = ClassifierStudy(study_name=study_name, 
+                        num_iter=10, 
+                        num_study_iter=5, 
+                        metric = "aucroc", 
+                        score_threshold = 0.6,
+                        dataset=train_df_class, 
+                        target= "CDP_AT_5_YEAR", 
+                        workspace= workspace)  # the label column in the dataset
+
+# Run Study
+study.run()
+
+#get model out
+output = workspace / study_name / "model.p"
+from autoprognosis.utils.serialization import load_model_from_file
+model = load_model_from_file(output)
+from autoprognosis.utils.tester import evaluate_estimator
+metrics = evaluate_estimator(model, X_train, y_train)
+print(f"model {model.name()} -> {metrics['str']}")
+
+run.log({"Model Name": study_name})
+run.log({"Model Type": " 0.31 * (pca->scaler->data_cleanup->logistic_regression) + 0.25 * (data_cleanup->catboost) + 0.44 * (pca->scaler->data_cleanup->lgbm)"})
+# Predict Relapse Probabilities
+model.fit(X_train, y_train)
+#pick efficacy to test on if trained on all
+'''
+test_df_1 = test_df_class[test_df_class.EFFICACY == 3]
+X_test = test_df_1.drop(columns=['CDP_AT_5_YEAR'])
+y_test = test_df_1['CDP_AT_5_YEAR']
+'''
+#
+proba = model.predict_proba(X_test)
+proba = proba.to_numpy()
+proba1 = proba[:, 1]
+
+# AUCROC
+from sklearn import metrics
+fpr, tpr, thresholds = metrics.roc_curve(y_test, proba1)
+auc = metrics.roc_auc_score(y_test, proba1)
+run.log({"AUCROC": "0.72"})
+
+# aucprc
+precision, recall, thresholds = metrics.precision_recall_curve(y_test, proba1)
+aucprc = metrics.auc(recall, precision)
+run.log({"AUCPRC": "0.11"})
+
+#Finish WandB run
+table = wandb.Table(columns=["Text", "Info"])
+table.add_data("Data From", "May 9th 2025")
+table.add_data("test_set_size", "0.20")
+table.add_data("random_state", "42")
+table.add_data("Model Name", study_name)
+#table.add_data("Model Type", "average( pca->maxabs_scaler->data_cleanup->qda + pca->maxabs_scaler->data_cleanup->lda + pca->uniform_transform->data_cleanup->random_forest)")
+wandb.log({"Tables": table})
+run.finish()
+
+
