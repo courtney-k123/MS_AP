@@ -1,4 +1,3 @@
-
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -11,8 +10,10 @@ from sklearn.impute import IterativeImputer
 from sklearn import metrics
 
 # import data
-patients = pd.read_csv("C:\\Users\\ck624\\OneDrive - University of Cambridge\\PhD Project (Will Brown)\\AI Projects\\R_AutoPrognosis\\Auto_Prognosis\\data_with_outcome\\2025_data\\patients_may_survival_and_classificationJuly212025.csv")
-date = "23.07.25"
+patients = pd.read_csv("/Users/ck624/Library/CloudStorage/OneDrive-UniversityofCambridge/PhD Project (Will Brown)/AI Projects/R_AutoPrognosis/Auto_Prognosis/data_with_outcome/2025_data/patients_may_survival_and_classificationAug142025.csv")
+
+#final_selection_survey = pd.read_csv("/Users/ck624/Library/CloudStorage/OneDrive-UniversityofCambridge/PhD Project (Will Brown)/AI Projects/R_AutoPrognosis/Auto_Prognosis/data_with_outcome/2025_data/pats_for_survey_Aug182025.csv")
+
 #remove unnecessary variables 
 del patients['TREATMENT']
 del patients['Country']
@@ -22,18 +23,11 @@ del patients['HAS_FAMILY_MS_HISTORY']
 del patients['NUM_RELAPSES_LAST_YEAR']
 del patients['DATE_OF_EDSS']
 
-#fill varibales 
-patients = patients.dropna(subset=['CUM_T2'])  # 1072 patients have MRI
-patients['NO_NEW_T2'] = patients['NO_NEW_T2'].fillna(0)
-patients['ANY_NEW_T2'] = patients['ANY_NEW_T2'].fillna(0)
-patients['ANY_ENHANCE'] = patients['ANY_ENHANCE'].replace(1, 2)
-patients['ANY_ENHANCE'] = patients['ANY_ENHANCE'].replace(0, 1)
+#fill variables as necessary
 patients['ANY_ENHANCE'] = patients['ANY_ENHANCE'].fillna(0)
+severity_map = {'MILD': 1, 'MODERATE': 2, 'SEVERE': 3}
+patients['SEVERITY'] = patients['SEVERITY'].map(severity_map)
 patients['SEVERITY'] = patients['SEVERITY'].fillna(0)
-patients['SEVERITY'] = patients['SEVERITY'].replace('MILD', 1)
-patients['SEVERITY'] = patients['SEVERITY'].replace('MODERATE', 2,)
-patients['SEVERITY'] = patients['SEVERITY'].replace('SEVERE', 3)
-patients = patients.dropna(subset=['GENDER'])
 
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
@@ -43,276 +37,339 @@ from sklearn.metrics.pairwise import euclidean_distances
 #and have disability outcome
 patients_new = patients.dropna(subset=['disability'])
 patients_new = patients_new[patients_new.classification == 1]
-patients_new = patients_new[patients_new.CUM_T2 > 0]
+
+# Custom bins for CUM_T2
+bins = [1, 5, 10, 20, 40, 100, float('inf')]
+labels = ['2-5', '5-10', '10-20', '20-40', '40-100', '100+']
+patients_new['CUM_T2_BIN'] = pd.cut(patients_new['CUM_T2'], bins=bins, labels=labels)
+
 
 #from chatgpt
-#Step 1: Get Propensity Scores
+#finding triplets
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 import pandas as pd
+from itertools import product
 
-# Define features and treatment
-features = ['GENDER', 'AGE_AT_TREATMENT','OCB_UNMATCHED','OCB_MATCHED', 'NUM_PREVIOUS_RELAPSES', 'ARR_LAST_YEAR', 'NO_MO_SINCE_LAST_RELAPSE', 'CUM_T2','ANY_NEW_T2','NO_NEW_T2', 'ANY_ENHANCE', 'SEVERITY', 'TIME_TO_TREAT', 'EDSS']  # gender should be encoded as numeric (e.g., 0/1)
-treatment_col = 'EFFICACY'
-
-'''
-# Scale features (optional but recommended)
-#scaler = StandardScaler()
-X = (patients_new[features])
-
-# Multinomial logistic regression
-clf = LogisticRegression(multi_class='multinomial', solver='lbfgs', max_iter=1000)
-clf.fit(X, patients_new[treatment_col])
-
-# Predict propensity scores (probabilities of each treatment)
-propensity_scores = clf.predict_proba(X)
-
-# Create a DataFrame of scores
-score_df = pd.DataFrame(propensity_scores, columns=['p1', 'p2', 'p3'], index=patients_new.index)
-
-# Merge back with original DataFrame
-df_ps = pd.concat([patients_new, score_df], axis=1)
-
-#I don't think we need to match
-#I think we find people from df_ps with similar propensities for all treatments
-df_ps_similar = df_ps[df_ps.p3 > 0.2]
-df_ps_similar = df_ps_similar[df_ps_similar.p3 < 0.5]
-df_ps_similar = df_ps_similar[df_ps_similar.p1 < 0.5]
-df_ps_similar = df_ps_similar[df_ps_similar.p2 < 0.5]
-df_ps_similar = df_ps_similar[df_ps_similar.p1 > 0.2]
-df_ps_similar = df_ps_similar[df_ps_similar.p2 > 0.2]
-
-filename = df_ps_similar
-df_ps_similar.to_csv(f"df_ps_{date}.csv", index=False)
-#now see who of these is similar across treatment groups
-from sklearn.neighbors import NearestNeighbors
-import pandas as pd
-
-# Your filtered dataframe with patients having similar propensity scores
-df_filtered = df_ps_similar  # replace with your actual filtered dataframe
-
-# Separate groups by treatment
-group1 = df_filtered[df_filtered[treatment_col] == 1]
-group2 = df_filtered[df_filtered[treatment_col] == 2]
-group3 = df_filtered[df_filtered[treatment_col] == 3]
-'''
-#seperate groups from OG dataframe
-group1 = patients_new[patients_new[treatment_col] == 1]
-group2 = patients_new[patients_new[treatment_col] == 2]
-group3 = patients_new[patients_new[treatment_col] == 3]
-
-import pandas as pd
-import numpy as np
-
-def custom_match_long(source_group, target_group, id_col='id', n_matches=3, features=None):
-    matches = []
-    pair_id = 0
-
-    source_group = source_group.copy()
-    target_group = target_group.copy()
-
-    # Custom bins for CUM_T2
-    bins = [2, 5, 10, 20, 40, float('inf')]
-    labels = ['2-5', '5-10', '10-20', '20-40', '50+']
-    source_group['CUM_T2_BIN'] = pd.cut(source_group['CUM_T2'], bins=bins, labels=labels)
-    target_group['CUM_T2_BIN'] = pd.cut(target_group['CUM_T2'], bins=bins, labels=labels)
-
-    # Define severity matching logic
-    severity_allowed = {
-        0: [0],
-        1: [1, 2],
-        2: [1, 2, 3],
-        3: [2, 3]
-    }
-
-    for _, src in source_group.iterrows():
-        # Apply exact match filters first
-        candidates = target_group[
-            (target_group['GENDER'] == src['GENDER']) &
-            (target_group['OCB_MATCHED'] == src['OCB_MATCHED']) &
-            (target_group['OCB_UNMATCHED'] == src['OCB_UNMATCHED']) &
-            (target_group['ANY_NEW_T2'] == src['ANY_NEW_T2']) &
-            (target_group['NO_NEW_T2'] == src['NO_NEW_T2']) &
-            (target_group['ANY_ENHANCE'] == src['ANY_ENHANCE']) &
-            (target_group['CUM_T2_BIN'] == src['CUM_T2_BIN'])
-        ].copy()
-
-        # Apply range filters
-        candidates = candidates[
-            (np.abs(candidates['AGE_AT_TREATMENT'] - src['AGE_AT_TREATMENT']) <= 7) &
-            (np.abs(candidates['NUM_PREVIOUS_RELAPSES'] - src['NUM_PREVIOUS_RELAPSES']) <= 1) &
-            (np.abs(candidates['ARR_LAST_YEAR'] - src['ARR_LAST_YEAR']) <= 0.6) &
-            (np.abs(candidates['EDSS'] - src['EDSS']) <= 1) &
-            (np.abs(candidates['NO_MO_SINCE_LAST_RELAPSE'] - src['NO_MO_SINCE_LAST_RELAPSE']) <= 5) &
-            (np.abs(candidates['TIME_TO_TREAT'] - src['TIME_TO_TREAT']) <= 5)
-        ]
-
-        # Apply flexible severity matching
-        allowed_values = severity_allowed.get(src['SEVERITY'], [src['SEVERITY']])
-        candidates = candidates[candidates['SEVERITY'].isin(allowed_values)]
-
-        if candidates.empty:
-            continue
-
-        # Limit to n_matches randomly if too many candidates
-        #candidates = candidates.sample(min(n_matches, len(candidates)), random_state=42)
-
-        # Build long format output
-        for _, tgt in candidates.iterrows():
-            pair_id += 1
-            src_row = src.copy()
-            src_row['pair_id'] = pair_id
-            src_row['role'] = 'source'
-            matches.append(src_row)
-
-            tgt_row = tgt.copy()
-            tgt_row['pair_id'] = pair_id
-            tgt_row['role'] = 'target'
-            matches.append(tgt_row)
-
-    matched_df = pd.DataFrame(matches)
-
-    if features:
-        cols = ['pair_id', 'role', id_col] + features
-        matched_df = matched_df[cols]
-
-    return matched_df
+def severity_match(s1, s2):
+    if s1 == 0 or s2 == 0:
+        return s1 == s2
+    if s1 == 1:
+        return s2 in [1, 2]
+    if s1 == 2:
+        return s2 in [2, 3]
+    if s1 == 3:
+        return s2 in [2, 3]
+    return False  # Just in case of unexpected values
 
 
-features_to_keep = ['GENDER', 'AGE_AT_TREATMENT', 'EFFICACY', 'OCB_UNMATCHED','OCB_MATCHED', 'NUM_PREVIOUS_RELAPSES', 'ARR_LAST_YEAR', 'NO_MO_SINCE_LAST_RELAPSE', 'CUM_T2','ANY_NEW_T2','NO_NEW_T2', 'ANY_ENHANCE', 'SEVERITY', 'EDSS', 'TIME_TO_TREAT']  # gender should be encoded as numeric (e.g., 0/1)
+def edss_match(edss1, edss2):
+    min_edss = min(edss1, edss2)
+    max_edss = max(edss1, edss2)
+    diff = abs(edss1 - edss2)
 
-matches_long_low_to_mod = custom_match_long(group1, group2, 
-                                  id_col='PATIENT_ID', 
-                                  features=features_to_keep)
+    if min_edss == 0:
+        return diff <= 0.5
+    elif 1 <= min_edss <= 5:
+        return diff <= 1.0
+    elif min_edss >= 5.5:
+        return diff <= 0.5
+    return False  # fallback (shouldn't trigger if values are valid)
 
-matches_long_low_to_high = custom_match_long(group1, group3, 
-                                  id_col='PATIENT_ID', 
-                                  features=features_to_keep)
+'''def relapses_match(r1, r2):
+    # Exact match required for 1
+    if r1 == 1 or r2 == 1:
+        return r1 == r2
+    # 2 can match 2 or 3
+    if r1 == 2:
+        return r2 in [2, 3]
+    if r2 == 2:
+        return r1 in [2, 3]
+    # 3 can match 3 or 4
+    if r1 == 3:
+        return r2 in [3, 4]
+    if r2 == 3:
+        return r1 in [3, 4]
+    # 4 or more can match each other
+    if r1 >= 4 and r2 >= 4:
+        return True
+    return False'''
 
-matches_long_mod_to_high = custom_match_long(group2, group3, 
-                                  id_col='PATIENT_ID', 
-                                  features=features_to_keep)
 
-#finding matching triplets 
-def build_triplets(matches_low_to_mod, matches_low_to_high, features, id_col='PATIENT_ID'):
-    # Identify shared sources
-    sources_low_to_mod = set(matches_low_to_mod.query("role == 'source'")[id_col])
-    sources_low_to_high = set(matches_low_to_high.query("role == 'source'")[id_col])
-    shared_sources = sources_low_to_mod.intersection(sources_low_to_high)
+def matches_numeric_criteria(p1, p2, p3, num_fields, tolerances):
+    for field, tol in zip(num_fields, tolerances):
+        values = [getattr(p1, field), getattr(p2, field), getattr(p3, field)]
+        if max(values) - min(values) > tol:
+            return False
+    return True
+
+def matches_symptom_rules(p1, p2, p3):
+    # Severe symptoms
+    def has_severe_symptom(p):
+        return p.FIRST_SYMPTOM_BRAINTSTEM == 1 or p.FIRST_SYMPTOM_SPINAL_CORD == 1
+
+    # Mild symptoms (for optional future use)
+    # def has_mild_symptom(p):
+    #     return p.FIRST_SYMPTOM_SUPRATENTORIAL == 1 or p.FIRST_SYMPTOM_OPTIC_PATHWAYS == 1
+
+    # Enforce severity consistency: if any has severe, all must
+    if any(has_severe_symptom(p) for p in [p1, p2, p3]):
+        if not all(has_severe_symptom(p) for p in [p1, p2, p3]):
+            return False
+
+    return True
+
+
+def find_custom_triplets(df):
+    df = df[df['EFFICACY'].isin([1, 2, 3])]
+    df['EFFICACY'] = df['EFFICACY'].astype(int)
+
+    exact_match_cols = [
+        'GENDER', 'OCB_MATCHED', 'OCB_UNMATCHED',
+        'ANY_NEW_T2', 'NO_NEW_T2', 'ANY_ENHANCE',
+        'CUM_T2_BIN', 'NUM_PREVIOUS_RELAPSES',
+    ]
+    
+    num_fields = ['AGE_AT_TREATMENT', 'NO_MO_SINCE_LAST_RELAPSE', 'TIME_TO_TREAT']
+    tolerances = [10, 6, 6]
 
     triplets = []
-    pair_id = 0
 
-    for source_id in shared_sources:
-        # Get source details (from one of the sets)
-        source_details = matches_low_to_mod[
-            (matches_low_to_mod[id_col] == source_id) & (matches_low_to_mod['role'] == 'source')
-        ].iloc[0]
+    # Group by exact match columns
+    grouped = df.groupby(exact_match_cols, observed=False)
 
-        # Get mod targets
-        mod_targets = matches_low_to_mod[
-            (matches_low_to_mod['role'] == 'target') &
-            (matches_low_to_mod['pair_id'].isin(
-                matches_low_to_mod[matches_low_to_mod[id_col] == source_id]['pair_id']
-            ))
-        ]
+    for group_vals, group_df in grouped:
+        eff1 = group_df[group_df['EFFICACY'] == 1]
+        eff2 = group_df[group_df['EFFICACY'] == 2]
+        eff3 = group_df[group_df['EFFICACY'] == 3]
 
-        # Get high targets
-        high_targets = matches_low_to_high[
-            (matches_low_to_high['role'] == 'target') &
-            (matches_low_to_high['pair_id'].isin(
-                matches_low_to_high[matches_low_to_high[id_col] == source_id]['pair_id']
-            ))
-        ]
-
-        # Build triplets: source + each combination of mod & high target
-        for _, mod_row in mod_targets.iterrows():
-            for _, high_row in high_targets.iterrows():
-                pair_id += 1
-                # Append source
-                triplets.append(
-                    {'triplet_id': pair_id, 'role': 'source', **source_details[features].to_dict()}
-                )
-                # Append mod target
-                triplets.append(
-                    {'triplet_id': pair_id, 'role': 'target_mod', **mod_row[features].to_dict()}
-                )
-                # Append high target
-                triplets.append(
-                    {'triplet_id': pair_id, 'role': 'target_high', **high_row[features].to_dict()}
-                )
-
-    return pd.DataFrame(triplets)
-
-features_to_keep = ['PATIENT_ID', 'GENDER', 'AGE_AT_TREATMENT', 'EFFICACY', 'OCB_UNMATCHED','OCB_MATCHED', 'NUM_PREVIOUS_RELAPSES', 'ARR_LAST_YEAR', 'NO_MO_SINCE_LAST_RELAPSE', 'CUM_T2','ANY_NEW_T2','NO_NEW_T2', 'ANY_ENHANCE', 'SEVERITY', 'EDSS', 'TIME_TO_TREAT']  # gender should be encoded as numeric (e.g., 0/1)
+        for p1, p2, p3 in product(eff1.itertuples(index=False),
+                                  eff2.itertuples(index=False),
+                                  eff3.itertuples(index=False)):
+            
+            # Apply relapse matching to all 3 pairs
+            '''r1, r2, r3 = p1.NUM_PREVIOUS_RELAPSES, p2.NUM_PREVIOUS_RELAPSES, p3.NUM_PREVIOUS_RELAPSES
+            if not (relapses_match(r1, r2) and relapses_match(r1, r3) and relapses_match(r2, r3)):
+                continue'''
+            
+            if not (
+                    edss_match(p1.EDSS, p2.EDSS) and
+                    edss_match(p1.EDSS, p3.EDSS) and
+                    edss_match(p2.EDSS, p3.EDSS)
+                    ):
+                continue
+            
+            s1, s2, s3 = p1.SEVERITY, p2.SEVERITY, p3.SEVERITY
+            if not (
+                    severity_match(s1, s2) and
+                    severity_match(s1, s3) and
+                    severity_match(s2, s3)
+                    ):
+                continue
 
 
-triplets_df = build_triplets(
-    matches_long_low_to_mod,
-    matches_long_low_to_high,
-    features=features_to_keep,
-    id_col='PATIENT_ID'
-)
+            if not matches_numeric_criteria(p1, p2, p3, num_fields, tolerances):
+                continue
 
-triplets_df.to_csv("matches_low_mod_high_23072025.csv")
+            if not matches_symptom_rules(p1, p2, p3):
+                continue
 
-final_patient_list = triplets_df['PATIENT_ID'].unique().tolist()
+            triplets.append((p1, p2, p3))
 
-patient_summary = (
-    triplets_df
-    .groupby('PATIENT_ID')
-    .agg(
-        roles=('role', lambda x: ', '.join(sorted(set(x)))),
-        appearances=('role', 'count')
-    )
-    .reset_index()
-)
+    return triplets
 
-from collections import defaultdict
-import random
+triplets = find_custom_triplets(patients_new)
 
-def select_unique_patients(triplets_df, n_each=5, id_col='PATIENT_ID'):
-    # Separate triplets into dict: triplet_id -> list of (role, treatment, PATIENT_ID)
-    triplet_groups = triplets_df.groupby('triplet_id')
 
-    triplet_data = {}
-    for triplet_id, group in triplet_groups:
-        triplet_data[triplet_id] = group[['role', 'EFFICACY', id_col]].to_dict('records')
+def triplets_to_long_dataframe(triplets):
+    rows = []
+    for triplet_id, (p1, p2, p3) in enumerate(triplets):
+        for role, patient in zip(['P1', 'P2', 'P3'], [p1, p2, p3]):
+            row = {'TRIPLET_ID': triplet_id, 'PATIENT_ROLE': role}
+            for field in patient._fields:
+                row[field] = getattr(patient, field)
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+# Convert to long format
+long_df = triplets_to_long_dataframe(triplets)
+
+long_df.to_csv("/Users/ck624/Library/CloudStorage/OneDrive-UniversityofCambridge/PhD Project (Will Brown)/AI Projects/R_AutoPrognosis/Auto_Prognosis/data_with_outcome/2025_data/triplets_Aug212025.csv")
+
+#long_df_class = long_df[long_df.classification == 1]
+
+long_df_low = long_df[long_df.EFFICACY == 1]
+
+############ for just matching on efficacy 1 and 2
+#############
+import pandas as pd
+from itertools import product
+
+def edss_match(edss1, edss2):
+    min_edss = min(edss1, edss2)
+    max_edss = max(edss1, edss2)
+    diff = abs(edss1 - edss2)
+
+    if min_edss == 0:
+        return diff <= 0.5
+    elif 1 <= min_edss <= 5:
+        return diff <= 1.0
+    elif min_edss >= 5.5:
+        return diff <= 0.5
+    return False  # fallback (shouldn't trigger if values are valid)
+
+
+def severity_match(s1, s2):
+    if s1 == 0 or s2 == 0:
+        return s1 == s2
+    if s1 == 1:
+        return s2 in [1, 2]
+    if s1 == 2:
+        return s2 in [2, 3]
+    if s1 == 3:
+        return s2 in [2, 3]
+    return False  # Just in case of unexpected values
+
+
+'''def relapses_match(r1, r2):
+    # Exact match required for 1
+    if r1 == 1 or r2 == 1:
+        return r1 == r2
+    # 2 can match 2 or 3
+    if r1 == 2:
+        return r2 in [2, 3]
+    if r2 == 2:
+        return r1 in [2, 3]
+    # 3 can match 3 or 4
+    if r1 == 3:
+        return r2 in [3, 4]
+    if r2 == 3:
+        return r1 in [3, 4]
+    # 4 or more can match each other
+    if r1 >= 4 and r2 >= 4:
+        return True
+    return False'''
+
+
+def matches_numeric_criteria(p1, p2, num_fields, tolerances):
+    for field, tol in zip(num_fields, tolerances):
+        values = [getattr(p1, field), getattr(p2, field)]
+        if max(values) - min(values) > tol:
+            return False
+    return True
+
+def matches_symptom_rules(p1, p2):
+    def has_severe_symptom(p):
+        return p.FIRST_SYMPTOM_BRAINTSTEM == 1 or p.FIRST_SYMPTOM_SPINAL_CORD == 1
+
+    # If either has a severe symptom, both must
+    if has_severe_symptom(p1) or has_severe_symptom(p2):
+        if not (has_severe_symptom(p1) and has_severe_symptom(p2)):
+            return False
+
+    return True
+
+
+def find_custom_doubles(df):
+    df = df[df['EFFICACY'].isin([1, 2])]
+    df['EFFICACY'] = df['EFFICACY'].astype(int)
+
+    exact_match_cols = [
+        'GENDER', 'OCB_MATCHED', 'OCB_UNMATCHED',
+        'ANY_NEW_T2', 'NO_NEW_T2', 'ANY_ENHANCE',
+        'CUM_T2_BIN', 'NUM_PREVIOUS_RELAPSES',
+    ]
     
-    selected_patients = set()
-    selected_final = []
-    counts = defaultdict(int)  # track how many per treatment
+    num_fields = ['AGE_AT_TREATMENT', 'NO_MO_SINCE_LAST_RELAPSE', 'TIME_TO_TREAT']
+    tolerances = [5, 6, 6]
 
-    # Shuffle triplets for fairness
-    triplet_ids = list(triplet_data.keys())
-    random.shuffle(triplet_ids)
+    doubles = []
 
-    for triplet_id in triplet_ids:
-        candidates = triplet_data[triplet_id]
-        
-        # Sort candidates by which treatment we need more of
-        candidates.sort(key=lambda x: counts[x['EFFICACY']])
-        
-        # Pick first available patient not used yet
-        for cand in candidates:
-            if cand[id_col] not in selected_patients and counts[cand['EFFICACY']] < n_each:
-                selected_patients.add(cand[id_col])
-                counts[cand['EFFICACY']] += 1
-                selected_final.append({
-                    'triplet_id': triplet_id,
-                    'PATIENT_ID': cand[id_col],
-                    'role': cand['role'],
-                    'EFFICACY': cand['EFFICACY']
-                })
-                break
+    grouped = df.groupby(exact_match_cols, observed=False)
 
-        # Stop if we have enough
-        if all(c >= n_each for c in counts.values()):
-            break
+    for group_vals, group_df in grouped:
+        eff1 = group_df[group_df['EFFICACY'] == 1]
+        eff2 = group_df[group_df['EFFICACY'] == 2]
 
-    return pd.DataFrame(selected_final), counts
+        for p1, p2 in product(eff1.itertuples(index=False),
+                              eff2.itertuples(index=False)):
+            
+            if not edss_match(p1.EDSS, p2.EDSS):
+                continue
+            
+            if not severity_match(p1.SEVERITY, p2.SEVERITY):
+                continue
+            
+            # New relapse rule
+            '''if not relapses_match(p1.NUM_PREVIOUS_RELAPSES, p2.NUM_PREVIOUS_RELAPSES):
+                continue'''
 
-selected_df, treatment_counts = select_unique_patients(triplets_df, n_each=5)
+            if not matches_numeric_criteria(p1, p2, num_fields, tolerances):
+                continue
 
-print(selected_df)
-print("Treatment distribution:", treatment_counts)
+            if not matches_symptom_rules(p1, p2):
+                continue
+
+            doubles.append((p1, p2))
+
+    return doubles
+
+doubles = find_custom_doubles(patients_new)
+
+def doubles_to_long_dataframe(doubles):
+    rows = []
+    for double_id, (p1, p2) in enumerate(doubles):
+        for role, patient in zip(['P1', 'P2'], [p1, p2]):
+            row = {'DOUBLE_ID': double_id, 'PATIENT_ROLE': role}
+            for field in patient._fields:
+                row[field] = getattr(patient, field)
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+# Convert to long format
+long_df_doubles = doubles_to_long_dataframe(doubles)
+#from the pairs randomly select 19 from EU, Canada, or US
+# List of prefixes to filter out
+bad_prefixes = ('LB', 'TR', 'IR', 'CO', 'KW') #allow OM (oman) to get us to right number
+
+# Identify which rows have "bad" patient IDs
+long_df_doubles['is_bad'] = long_df_doubles['PATIENT_ID'].str.startswith(bad_prefixes)
+
+# Identify PAIR_IDs that have at least one bad patient
+bad_pair_ids = long_df_doubles.loc[long_df_doubles['is_bad'], 'DOUBLE_ID'].unique()
+
+# Remove all rows with those PAIR_IDs
+long_df_doubles_cleaned = long_df_doubles[~long_df_doubles['DOUBLE_ID'].isin(bad_pair_ids)].copy()
+
+# Drop helper column
+long_df_doubles_cleaned.drop(columns='is_bad', inplace=True)
+
+#save doubles id
+selected_pair_ids = long_df_doubles_cleaned['DOUBLE_ID'].drop_duplicates()
+
+# Step 1: Randomly split the 18 pairs into 9 and 9
+split_pairs = selected_pair_ids.sample(frac=1, random_state=42)  # shuffle
+pairs_for_e1 = split_pairs.iloc[:9]
+pairs_for_e2 = split_pairs.iloc[9:]
+
+# Step 4: From each pair set, extract the individual with the correct EFFICACY
+final_e1 = long_df_doubles_cleaned[(long_df_doubles_cleaned['DOUBLE_ID'].isin(pairs_for_e1)) & (long_df_doubles_cleaned['EFFICACY'] == 1)]
+final_e2 = long_df_doubles_cleaned[(long_df_doubles_cleaned['DOUBLE_ID'].isin(pairs_for_e2)) & (long_df_doubles_cleaned['EFFICACY'] == 2)]
+
+
+#and then take one not from europe to make 20 people
+long_df_doubles_bad = long_df_doubles[long_df_doubles['DOUBLE_ID'].isin(bad_pair_ids)].copy()
+
+# Step 1: Randomly select 1 pairs
+selected_pair_id = long_df_doubles_bad['DOUBLE_ID'].drop_duplicates().sample(n=1, random_state=42)
+
+# Step 2: Get only the data for those 19 pairs
+selected_pair = long_df_doubles_bad[long_df_doubles_bad['DOUBLE_ID'].isin(selected_pair_id)]
+
+selected_pair = selected_pair[selected_pair.EFFICACY == 2]
+del selected_pair['is_bad']
+# Step 5: Combine the final individuals
+final_selection = pd.concat([final_e1, final_e2, selected_pair]).sort_values(by='DOUBLE_ID')
+
+final_selection_survey = pd.concat([final_selection, long_df_low]).sort_values(by='DOUBLE_ID')
