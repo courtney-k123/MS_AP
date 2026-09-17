@@ -6,6 +6,8 @@ The model was developed using data from MSBase (https://www.msbase.org/), and ex
 
 This code outlines the process of taking appropriately formatted data and running AutoPrognosis 2.0 on it to identify the best modelling pipeline. 
 
+<img width="788" height="392" alt="image" src="https://github.com/user-attachments/assets/60e46bd4-d799-4a4c-8572-3b562eb3c4d0" />
+
 # Background
 
 Timely initiation of disease-modifying therapy (DMT) is critical to preventing disability accrual in multiple sclerosis (MS), yet treatment response varies substantially between individuals. Validated tools for predicting individualized treatment response, particularly at treatment initiation, remain lacking (Hegen et al., 2016; Ontaneda et al., 2019).
